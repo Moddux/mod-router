@@ -1,0 +1,300 @@
+#!/usr/bin/env bash
+# MOD-ROUTER DEPLOYMENT GUIDE
+# Copy/paste ready runnable commands for complete system deployment
+
+cat << 'EOF'
+╔════════════════════════════════════════════════════════════════════════════╗
+║                    MOD-ROUTER DEPLOYMENT GUIDE                            ║
+║            Forensic DNS + Network Audit Stack - Terminal Mode             ║
+╚════════════════════════════════════════════════════════════════════════════╝
+
+SYSTEM REQUIREMENTS:
+  - Debian/Ubuntu Linux (20.04 LTS or newer)
+  - 2+ CPU cores, 4GB RAM, 50GB+ disk (for long-term retention)
+  - Root/sudo access
+  - Network interface available (eth0 or eth1)
+
+════════════════════════════════════════════════════════════════════════════
+
+DEPLOYMENT STEPS (Copy/paste each section):
+
+════════════════════════════════════════════════════════════════════════════
+STEP 0: SYSTEM PREP
+════════════════════════════════════════════════════════════════════════════
+
+# Clone or navigate to MOD-ROUTER repo
+cd /home/mdx/mod-router
+
+# Make scripts executable
+chmod +x scripts/*.sh
+
+# Validate system prerequisites
+bash scripts/validate.sh
+
+════════════════════════════════════════════════════════════════════════════
+STEP 1: FULL AUTOMATIC DEPLOYMENT (RECOMMENDED)
+════════════════════════════════════════════════════════════════════════════
+
+# Deploy entire stack in one command
+bash scripts/full-deploy.sh
+
+# This runs all phases automatically:
+#   Phase 0: System initialization + database
+#   Phase 1: Zeek network forensics
+#   Phase 2: DNS authority (Pi-hole + Unbound + Knot)
+#   Phase 3: Device behavioral timeline system
+#   Phase 4: DoH/VPN detection + blocking
+#   Phase 5: MITM lab (optional)
+#   Phase 6: Integration tests
+
+# Expected time: 10-15 minutes
+# Log file: /var/log/mod-router/deployment.log
+
+════════════════════════════════════════════════════════════════════════════
+STEP 2: VERIFY DEPLOYMENT
+════════════════════════════════════════════════════════════════════════════
+
+# Check database initialization
+sqlite3 /opt/mod-router/mod-router.db "SELECT COUNT(*) FROM devices;"
+
+# Test DNS services
+dig @127.0.0.1 -p 53 google.com
+dig @127.0.0.1 -p 5353 google.com
+
+# Check services running
+systemctl status dnsmasq unbound knot-resolver
+
+# Verify logs created
+ls -lah /var/log/mod-router/
+
+════════════════════════════════════════════════════════════════════════════
+STEP 3: CONFIGURE ZEEK NETWORK CAPTURE
+════════════════════════════════════════════════════════════════════════════
+
+# Identify network interface to monitor
+ip link show | grep "UP" | grep -v "lo"
+
+# Start Zeek on interface (e.g., eth0)
+sudo bash /home/mdx/mod-router/scripts/zeek-runner.sh eth0
+
+# In separate terminal, monitor Zeek logs
+tail -f /var/log/mod-router/zeek/dns-forensics
+tail -f /var/log/mod-router/zeek/tls-metadata
+
+════════════════════════════════════════════════════════════════════════════
+STEP 4: BUILD DEVICE BEHAVIORAL PROFILES
+════════════════════════════════════════════════════════════════════════════
+
+# Generate timelines for all devices (after Zeek collects traffic)
+python3 /opt/mod-router/device-timeline-builder.py
+
+# This creates:
+#   - Per-device DNS query timelines
+#   - Flow correlation with device IDs
+#   - ASN ownership attribution
+#   - Incident correlation
+
+# View device profiles
+ls -lah /var/log/mod-router/timelines/
+
+# Export single device timeline
+python3 /opt/mod-router/device-timeline-builder.py MAC_AA_BB_CC_DD_EE > /tmp/device-1.json
+
+════════════════════════════════════════════════════════════════════════════
+STEP 5: DETECT DOH/VPN USAGE
+════════════════════════════════════════════════════════════════════════════
+
+# Scan all devices for DoH indicators
+python3 /opt/mod-router/doh-analyzer.py
+
+# Detailed report for single device
+python3 /opt/mod-router/doh-analyzer.py MAC_AA_BB_CC_DD_EE
+
+# This detects:
+#   - Direct connections to known DoH IPs (1.1.1.1, 8.8.8.8, etc.)
+#   - QUIC/UDP port 443 (DoH-over-QUIC)
+#   - DNS queries without port 53 traffic
+#   - VPN usage (multi-ASN routing)
+
+# Deploy blocking rules
+sudo bash /opt/mod-router/block-doh.sh
+
+# Verify rules deployed
+sudo nft list table inet doh_block
+
+════════════════════════════════════════════════════════════════════════════
+STEP 6: FORENSIC INCIDENT RESPONSE
+════════════════════════════════════════════════════════════════════════════
+
+# Create forensic incident (e.g., suspicious activity detected)
+sqlite3 /opt/mod-router/mod-router.db << 'INCIDENT'
+INSERT INTO incidents (device_id, incident_type, description, severity)
+SELECT device_id, 'suspicious_dns', 'Excessive blocked queries', 'medium'
+FROM devices WHERE mac_addr = 'AA:BB:CC:DD:EE:FF';
+INCIDENT
+
+# Generate incident report with evidence
+INCIDENT_ID=1
+python3 /opt/mod-router/incident-report.py $INCIDENT_ID > /tmp/incident-$INCIDENT_ID.json
+
+# This includes:
+#   - Device information
+#   - Related flows (last 100)
+#   - DNS queries (±5 min window)
+#   - Timeline reconstruction
+
+# Export PCAP for Wireshark analysis
+bash /opt/mod-router/pcap-exporter.sh MAC_AA_BB_CC_DD_EE \
+  '2025-01-21 10:00:00' '2025-01-21 10:05:00' /tmp/forensics.pcap
+
+# Analyze in Wireshark
+wireshark /tmp/forensics.pcap.filtered
+
+════════════════════════════════════════════════════════════════════════════
+STEP 7: OPTIONAL - MITM LAB SETUP (AUTHORIZED TESTING ONLY)
+════════════════════════════════════════════════════════════════════════════
+
+# Review security notice
+cat /opt/mod-router/mitm-lab/SECURITY_NOTICE.txt
+
+# Set up MITM lab (isolated network only)
+bash /home/mdx/mod-router/scripts/05-mitm-lab-setup.sh
+
+# On test device, install CA certificate
+bash /opt/mod-router/mitm-lab/install-ca-on-device.sh 192.168.1.100
+
+# Start mitmproxy on router
+bash /opt/mod-router/mitm-lab/start-mitmproxy.sh
+
+# Configure test device to use router:8080 as HTTP/HTTPS proxy
+# All traffic will be intercepted and logged
+
+# Analyze captured traffic
+bash /opt/mod-router/mitm-lab/analyze-pcaps.sh
+
+════════════════════════════════════════════════════════════════════════════
+STEP 8: CONTINUOUS MONITORING & LOG ROTATION
+════════════════════════════════════════════════════════════════════════════
+
+# Monitor DNS queries in real-time
+tail -f /var/log/mod-router/dnsmasq-queries.log
+
+# Monitor Zeek flows
+tail -f /var/log/mod-router/zeek/conn.log | head -20
+
+# Query database for recent activity
+sqlite3 /opt/mod-router/mod-router.db << 'QUERY'
+SELECT 
+  d.hostname,
+  COUNT(DISTINCT dns.queried_domain) as unique_domains,
+  COUNT(dns.query_id) as total_queries,
+  MAX(dns.timestamp) as last_activity
+FROM devices d
+LEFT JOIN dns_queries dns ON d.device_id = dns.device_id
+WHERE dns.timestamp > datetime('now', '-1 hour')
+GROUP BY d.device_id
+ORDER BY total_queries DESC
+LIMIT 10;
+QUERY
+
+# Compress logs (monthly rotation)
+find /var/log/mod-router -name '*.log' -mtime +30 -exec gzip {} \;
+
+# Backup database (weekly)
+cp /opt/mod-router/mod-router.db /opt/mod-router/mod-router.db.$(date +%Y%m%d)
+
+════════════════════════════════════════════════════════════════════════════
+OPERATIONAL COMMANDS (COPY/PASTE)
+════════════════════════════════════════════════════════════════════════════
+
+# View all tracked devices
+sqlite3 /opt/mod-router/mod-router.db "SELECT device_id, mac_addr, ipv4_addr, hostname FROM devices LIMIT 20;"
+
+# List blocked DNS queries
+sqlite3 /opt/mod-router/mod-router.db "SELECT queried_domain, COUNT(*) FROM dns_queries WHERE is_blocked=1 GROUP BY queried_domain ORDER BY COUNT(*) DESC LIMIT 20;"
+
+# Find devices with DoH usage
+sqlite3 /opt/mod-router/mod-router.db "SELECT DISTINCT device_id, dst_ip FROM flows WHERE dst_ip IN ('1.1.1.1', '8.8.8.8') AND dst_port=443;"
+
+# Timeline for specific device (last 7 days)
+python3 /opt/mod-router/device-timeline-builder.py MAC_AA_BB_CC_DD_EE /tmp/timeline.json
+jq '.' /tmp/timeline.json
+
+# Generate comprehensive incident report
+sqlite3 /opt/mod-router/mod-router.db "SELECT * FROM incidents WHERE severity='high' ORDER BY timestamp DESC LIMIT 5;"
+
+# ASN enrichment for all flows
+python3 /opt/mod-router/asn-enrichment.py
+
+# Validate system health
+bash /home/mdx/mod-router/scripts/validate.sh
+
+════════════════════════════════════════════════════════════════════════════
+TROUBLESHOOTING
+════════════════════════════════════════════════════════════════════════════
+
+# DNS not responding
+systemctl restart dnsmasq unbound knot-resolver
+netstat -tulpn | grep -E ":(53|5353|5354)"
+
+# Zeek not capturing
+ps aux | grep zeek
+sudo tcpdump -i eth0 -c 5 dst port 443
+
+# Database locked
+fuser /opt/mod-router/mod-router.db
+
+# Low disk space
+du -sh /var/log/mod-router/
+du -sh /var/lib/mod-router/
+
+# Increase DNS cache
+# Edit /etc/unbound/conf.d/mod-router.conf
+# cache-max-ttl: 604800
+sudo systemctl restart unbound
+
+════════════════════════════════════════════════════════════════════════════
+DOCUMENTATION
+════════════════════════════════════════════════════════════════════════════
+
+README.md         - Project overview + capabilities
+ARCHITECTURE.md   - System design, deployment guide, compliance
+QUICKREF.md       - Command reference + troubleshooting
+SECURITY_NOTICE   - Legal/ethical MITM requirements
+
+════════════════════════════════════════════════════════════════════════════
+SUPPORT
+════════════════════════════════════════════════════════════════════════════
+
+Repository: /home/mdx/mod-router
+Database:   /opt/mod-router/mod-router.db
+Logs:       /var/log/mod-router/
+Config:     /etc/unbound/, /etc/dnsmasq.d/, /etc/knot-resolver/
+
+Git history:
+cd /home/mdx/mod-router && git log --oneline
+
+════════════════════════════════════════════════════════════════════════════
+QUICK VALIDATION CHECKLIST
+════════════════════════════════════════════════════════════════════════════
+
+[_] DNS services running (port 53, 5353, 5354)
+[_] Database initialized with tables
+[_] Zeek capturing traffic on eth0
+[_] Query logs generated (dnsmasq, Unbound)
+[_] Device timeline builder working
+[_] DoH detection scanner running
+[_] PCAP exporter functional
+[_] Incident reporting working
+[_] Forensic timeline reconstruction tested
+[_] Long-term retention backup scheduled
+
+════════════════════════════════════════════════════════════════════════════
+
+Deployment complete! MOD-ROUTER is ready for network forensics + audit operations.
+
+Next: Monitor /var/log/mod-router/ + run periodic timeline/enrichment jobs.
+
+════════════════════════════════════════════════════════════════════════════
+
+EOF
