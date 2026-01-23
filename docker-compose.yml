@@ -1,0 +1,375 @@
+version: '3.9'
+
+# MOD-ROUTER: Forensic DNS + Network Audit Stack
+# Production docker-compose configuration
+# Supports: DNS authority, Zeek network forensics, device tracking, incident response
+
+services:
+  
+  # ========================================================================
+  # Core MOD-ROUTER Service
+  # ========================================================================
+  mod-router:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: mod-router
+    restart: unless-stopped
+    
+    # Security: Run as non-root with minimal capabilities
+    user: "mod-router:mod-router"
+    
+    # Capabilities required for network forensics
+    cap_add:
+      - NET_RAW        # Packet capture (Zeek)
+      - NET_ADMIN      # Network configuration
+      - NET_BIND_SERVICE  # Bind to port 53
+      - SYS_ADMIN      # Optional: for nftables rules
+    
+    # Disable privilege escalation
+    security_opt:
+      - no-new-privileges:true
+    
+    # Ports
+    ports:
+      # DNS Services
+      - "53:53/udp"           # dnsmasq DNS
+      - "53:53/tcp"           # dnsmasq DNS (TCP fallback)
+      - "5353:5353/tcp"       # Unbound resolver
+      - "5354:5354/udp"       # Knot Resolver
+      # Optional: MITM Lab (commented by default for security)
+      # - "8080:8080/tcp"     # mitmproxy
+    
+    # Environment variables
+    environment:
+      MOD_ROUTER_HOME: /opt/mod-router
+      MOD_ROUTER_DB: /opt/mod-router/mod-router.db
+      MOD_ROUTER_LOGS: /var/log/mod-router
+      MOD_ROUTER_PCAPS: /var/lib/mod-router/pcaps
+      
+      # DNS Configuration
+      UNBOUND_THREADS: "4"
+      DNSMASQ_CACHE_SIZE: "10000"
+      
+      # Optional: Enable debug logging
+      # DEBUG: "1"
+    
+    # Volumes for persistence
+    volumes:
+      # Database persistence
+      - mod-router-db:/opt/mod-router
+      
+      # Log persistence
+      - mod-router-logs:/var/log/mod-router
+      
+      # PCAP persistence
+      - mod-router-pcaps:/var/lib/mod-router/pcaps
+      
+      # Configuration (optional: override defaults)
+      - ./config/unbound.conf:/etc/unbound/conf.d/mod-router.conf:ro
+      - ./config/dnsmasq.conf:/etc/dnsmasq.d/mod-router.conf:ro
+      
+      # Zeek policies (optional: custom policies)
+      # - ./zeek/policies:/opt/mod-router/zeek/policies:ro
+    
+    # DNS configuration for container
+    dns:
+      - 127.0.0.1
+      - 1.1.1.1
+    dns_search: []
+    
+    # Logging configuration
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "100m"
+        max-file: "10"
+    
+    # Health check
+    healthcheck:
+      test: ["CMD", "/opt/mod-router/healthcheck.sh"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    
+    # Network configuration
+    networks:
+      - mod-router-network
+    
+    # Resource limits (adjust based on load)
+    deploy:
+      resources:
+        limits:
+          cpus: '2'
+          memory: 2G
+        reservations:
+          cpus: '1'
+          memory: 1G
+    
+    # Labels for monitoring/automation
+    labels:
+      com.mod-router.component: "dns-forensics"
+      com.mod-router.version: "1.0.0"
+      com.mod-router.environment: "production"
+
+  # ========================================================================
+  # Optional: Zeek Network Forensics Service
+  # (Requires host network access for packet capture)
+  # ========================================================================
+  zeek:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: mod-router-zeek
+    restart: unless-stopped
+    depends_on:
+      - mod-router
+    
+    # IMPORTANT: Zeek requires host network to access physical interfaces
+    # Use --net=host in docker-compose, but this requires careful security
+    # Consider running on host directly instead
+    network_mode: host
+    
+    user: "mod-router:mod-router"
+    
+    cap_add:
+      - NET_RAW
+      - NET_ADMIN
+    
+    # Override entrypoint to run Zeek
+    entrypoint: /bin/bash
+    command:
+      - -c
+      - |
+        echo "[*] Starting Zeek network forensics..."
+        mkdir -p /var/log/mod-router/zeek
+        zeek -i eth0 \
+          -C \
+          -L /opt/mod-router/zeek/policies/mod-router.zeek \
+          --logdir /var/log/mod-router/zeek
+        echo "[+] Zeek running on eth0"
+        sleep infinity
+    
+    # Volumes
+    volumes:
+      - mod-router-zeek-logs:/var/log/mod-router/zeek
+    
+    # Logging
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "100m"
+        max-file: "20"
+    
+    labels:
+      com.mod-router.component: "zeek-forensics"
+    
+    # Disabled by default (uncomment to enable)
+    # profiles:
+    #   - zeek
+
+  # ========================================================================
+  # Optional: Periodic Timeline Builder Service
+  # (Runs timeline generation every hour)
+  # ========================================================================
+  timeline-builder:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: mod-router-timeline
+    restart: unless-stopped
+    depends_on:
+      - mod-router
+    
+    # Override entrypoint for timeline generation
+    entrypoint: /bin/bash
+    command:
+      - -c
+      - |
+        echo "[*] Starting timeline builder service..."
+        while true; do
+          echo "[*] Generating device behavioral timelines..."
+          python3 /opt/mod-router/device-timeline-builder.py 2>&1 | tail -20
+          echo "[+] Timelines updated"
+          sleep 3600  # Run hourly
+        done
+    
+    # Volumes (shared with main service)
+    volumes:
+      - mod-router-db:/opt/mod-router
+      - mod-router-logs:/var/log/mod-router
+    
+    # Network
+    networks:
+      - mod-router-network
+    
+    # Logging
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "5"
+    
+    labels:
+      com.mod-router.component: "timeline-builder"
+    
+    # Disabled by default
+    # profiles:
+    #   - timeline
+
+  # ========================================================================
+  # Optional: DoH/VPN Detection Service
+  # (Runs detection analysis every 30 minutes)
+  # ========================================================================
+  doh-detector:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: mod-router-doh
+    restart: unless-stopped
+    depends_on:
+      - mod-router
+    
+    entrypoint: /bin/bash
+    command:
+      - -c
+      - |
+        echo "[*] Starting DoH/VPN detection service..."
+        while true; do
+          echo "[*] Running DoH/VPN analysis..."
+          python3 /opt/mod-router/doh-analyzer.py | jq '.[] | select(.is_doh_user == true or .is_vpn_user == true) | {device_id, doh_indicators, vpn_indicators}' 2>/dev/null || echo "No suspicious activity"
+          echo "[+] Detection complete"
+          sleep 1800  # Run every 30 minutes
+        done
+    
+    volumes:
+      - mod-router-db:/opt/mod-router
+      - mod-router-logs:/var/log/mod-router
+    
+    networks:
+      - mod-router-network
+    
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "5"
+    
+    labels:
+      com.mod-router.component: "doh-detector"
+    
+    # Disabled by default
+    # profiles:
+    #   - detection
+
+  # ========================================================================
+  # Optional: Prometheus Exporter for Monitoring
+  # (Exposes metrics on port 9100)
+  # ========================================================================
+  node-exporter:
+    image: prom/node-exporter:latest
+    container_name: mod-router-exporter
+    restart: unless-stopped
+    depends_on:
+      - mod-router
+    
+    ports:
+      - "9100:9100"
+    
+    volumes:
+      - /proc:/host/proc:ro
+      - /sys:/host/sys:ro
+      - /:/rootfs:ro
+    
+    command:
+      - '--path.procfs=/host/proc'
+      - '--path.sysfs=/host/sys'
+      - '--collector.filesystem.mount-points-exclude=^/(sys|proc|dev|host|etc)($$|/)'
+    
+    networks:
+      - mod-router-network
+    
+    labels:
+      com.mod-router.component: "monitoring"
+    
+    # Disabled by default
+    # profiles:
+    #   - monitoring
+
+# ============================================================================
+# Volumes
+# ============================================================================
+volumes:
+  mod-router-db:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: ./data/db
+  
+  mod-router-logs:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: ./data/logs
+  
+  mod-router-pcaps:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: ./data/pcaps
+  
+  mod-router-zeek-logs:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: ./data/zeek
+
+# ============================================================================
+# Networks
+# ============================================================================
+networks:
+  mod-router-network:
+    driver: bridge
+    driver_opts:
+      com.docker.network.bridge.name: "br-mod-router"
+    ipam:
+      config:
+        - subnet: 172.25.0.0/16
+
+# ============================================================================
+# Profiles - Enable optional services:
+# ============================================================================
+#
+# Run core services (DNS, forensics):
+#   docker-compose up
+#
+# Run with Zeek (requires host network):
+#   docker-compose --profile zeek up
+#
+# Run with timeline builder:
+#   docker-compose --profile timeline up
+#
+# Run with DoH detection:
+#   docker-compose --profile detection up
+#
+# Run all services:
+#   docker-compose --profile zeek --profile timeline --profile detection --profile monitoring up
+#
+# Run in background:
+#   docker-compose up -d
+#
+# View logs:
+#   docker-compose logs -f mod-router
+#   docker-compose logs -f zeek
+#
+# Stop services:
+#   docker-compose down
+#
+# Prune volumes (WARNING: deletes data):
+#   docker-compose down -v
+

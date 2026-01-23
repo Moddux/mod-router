@@ -1,0 +1,109 @@
+# .dockerignore - Exclude unnecessary files from Docker build context
+
+# Git metadata
+.git/
+.gitignore
+.gitattributes
+
+# Development
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+.venv/
+*.egg-info/
+dist/
+build/
+
+# Runtime data (don't include in image)
+data/
+logs/
+*.log
+*.db
+*.pcap
+pcaps/
+/var/
+
+# Docker
+Dockerfile
+docker-compose.yml
+.dockerignore
+.dockerfile
+
+# CI/CD
+.github/
+.gitlab-ci.yml
+.travis.yml
+Jenkinsfile
+
+# Documentation (keep if space allows)
+*.md
+LICENSE
+CONTRIBUTING.md
+
+# Test artifacts
+test/
+tests/
+__tests__/
+coverage/
+.pytest_cache/
+
+# Build artifacts
+*.o
+*.a
+*.la
+*.lo
+*.so.*
+*.dylib
+*.dll
+*.exe
+
+# Temporary files
+/tmp/
+/temp/
+*.tmp
+*.temp
+
+# Sensitive data (ensure not included)
+*.key
+*.pem
+*.crt
+secrets.yaml
+.env
+.env.local
+
+# OS files
+Thumbs.db
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+.Spotlight-V100
+.Trashes
+
+# Node (if any UI components)
+node_modules/
+npm-debug.log
+yarn.lock
+package-lock.json
+
+# Large files
+*.iso
+*.tar.gz
+*.zip
+
+# Documentation site builds
+docs/_build/
+site/
+
