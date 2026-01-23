@@ -23,7 +23,7 @@ numpy==1.26.3
 # sqlite3 - standard library
 
 # HTTP/Web
-urllib3==2.1.0
+urllib3==2.6.3
 certifi==2023.7.22
 
 # JSON/Data
