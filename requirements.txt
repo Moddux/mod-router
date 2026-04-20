@@ -31,7 +31,7 @@ lxml==4.9.4
 xmltodict==13.0.2
 
 # Optional: MITM proxy
-mitmproxy==10.1.1
+mitmproxy==12.2.2
 mitmproxy-wireguard==0.1.16
 
 # Development (optional)
