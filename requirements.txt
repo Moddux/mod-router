@@ -24,7 +24,7 @@ numpy==1.26.3
 
 # HTTP/Web
 urllib3==2.1.0
-certifi==2023.7.22
+certifi==2024.7.4
 
 # JSON/Data
 lxml==4.9.4
